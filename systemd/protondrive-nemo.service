@@ -6,8 +6,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env node %h/protondrive-nemo/dist/cli.js mount
-ExecStop=/usr/bin/env node %h/protondrive-nemo/dist/cli.js unmount
+# A plain `env node` won't find anything under nvm — systemd user services
+# get a minimal, non-interactive environment, and most nvm installs hook
+# into `.bashrc` behind an "is this shell interactive?" guard that a
+# non-interactive `bash -lc` doesn't satisfy either. Sourcing nvm.sh
+# directly is the standard way to get nvm's node in contexts like this
+# (systemd, cron) regardless of that guard.
+ExecStart=/bin/bash -c 'source %h/.nvm/nvm.sh && node %h/protondrive-nemo/dist/cli.js mount'
+ExecStop=/bin/bash -c 'source %h/.nvm/nvm.sh && node %h/protondrive-nemo/dist/cli.js unmount'
 Restart=on-failure
 RestartSec=5
 
