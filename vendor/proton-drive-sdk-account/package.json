@@ -1,0 +1,15 @@
+{
+  "name": "proton-drive-sdk-account",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Vendored copy of ProtonDriveApps/sdk incubating/account/js — login, session, and account API access for the Drive SDK. Not published upstream; see ../../VENDOR.md for provenance. Shipped as raw TypeScript, matching upstream (no compiled build step): esbuild bundles it directly, same as it bundles @protontech/crypto.",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "ky": "^1.14.3"
+  },
+  "peerDependencies": {
+    "@protontech/crypto": "^2.0.0"
+  }
+}

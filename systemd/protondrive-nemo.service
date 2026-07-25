@@ -1,0 +1,15 @@
+[Unit]
+Description=Proton Drive FUSE mount (unofficial)
+Documentation=https://github.com/ProtonDriveApps/sdk
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env node %h/protondrive-nemo/dist/cli.js mount
+ExecStop=/usr/bin/env node %h/protondrive-nemo/dist/cli.js unmount
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

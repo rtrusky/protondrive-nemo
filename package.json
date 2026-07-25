@@ -1,0 +1,34 @@
+{
+  "name": "protondrive-nemo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial FUSE mount of Proton Drive for Nemo and other Linux file managers",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "protondrive-nemo": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@cocalc/fuse-native": "^2.4.3",
+    "@protontech/crypto": "^2.1.1",
+    "@protontech/drive-sdk": "^0.19.2",
+    "@protontech/global-types": "^1.1.0",
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0",
+    "keytar": "^7.9.0",
+    "ky": "^1.14.3",
+    "open": "^10.1.0",
+    "proton-drive-sdk-account": "file:vendor/proton-drive-sdk-account"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.16.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.9.3"
+  }
+}
