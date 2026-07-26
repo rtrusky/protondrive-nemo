@@ -90,6 +90,22 @@ systemctl --user enable --now protondrive-nemo
 nemo -q                                    # restart Nemo to pick it up
 ```
 
+### Add a "Clear cache" right-click action
+
+Adds a right-click entry (on folders) that deletes the locally cached
+decrypted copies of your files without deleting anything from Drive — the
+next time you open a file it just re-downloads and re-decrypts. The action
+only acts when used on the `~/ProtonDrive` folder itself; on any other
+folder it's a no-op.
+
+```bash
+./scripts/install-nemo-clear-cache-action.sh
+nemo -q                                    # restart Nemo to pick it up
+```
+
+Don't run it while a file under the mount is open with unsaved changes —
+see the caution comment in `scripts/clear-protondrive-cache.sh`.
+
 ## Architecture
 
 ```
