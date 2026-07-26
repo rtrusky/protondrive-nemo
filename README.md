@@ -120,6 +120,15 @@ it can't corrupt an in-progress edit.
 nemo -q                                    # restart Nemo to pick it up
 ```
 
+Note: evicting an image and then immediately redisplaying its folder in
+Nemo can make it look like nothing happened — Nemo re-reads the file to
+regenerate its thumbnail whenever it redisplays a folder, which silently
+re-downloads it seconds later. The eviction itself did work (confirmed via
+the daemon's own logs); this is just an inherent side effect of any
+thumbnailing file manager reading image bytes to draw a preview, the same
+way a browser re-fetches an image on revisiting a page even after clearing
+cache. Evicting a file you're not actively browsing in Nemo stays evicted.
+
 ### Show cache status in Nemo (emblem + column)
 
 A `nemo-python` extension (`nemo-extension/protondrive_cache_status.py`)
