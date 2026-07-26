@@ -76,12 +76,18 @@ function placeholderNode(path: string, name: string): NodeEntity {
  * fully materialized locally on open and uploaded on release — see
  * contentStore.ts.
  */
+export interface FuseOperationsHandle {
+    ops: Fuse.OPERATIONS;
+    /** True if the path has a locally open handle with changes not yet uploaded (dirty write or brand-new file). */
+    hasUnsavedChanges: (path: string) => boolean;
+}
+
 export function createFuseOperations(
     sdk: ProtonDriveClient,
     tree: DriveTree,
     content: ContentStore,
     logger: Logger,
-): Fuse.OPERATIONS {
+): FuseOperationsHandle {
     const openFiles = new Map<number, OpenFile>();
     // Mirrors openFiles, keyed by path: a file that was just create()'d
     // doesn't exist as a Drive node yet (it's uploaded on release), but the
@@ -104,7 +110,7 @@ export function createFuseOperations(
         return fd;
     }
 
-    return {
+    const ops: Fuse.OPERATIONS = {
         getattr(path, cb) {
             if (path === '/') {
                 cb(0, {
@@ -334,6 +340,13 @@ export function createFuseOperations(
                 .catch((err) => cb(errnoFor(err)));
         },
     };
+
+    function hasUnsavedChanges(path: string): boolean {
+        const file = openFilesByPath.get(path);
+        return !!file && (file.dirty || file.isNewFile);
+    }
+
+    return { ops, hasUnsavedChanges };
 }
 
 async function drain(iterable: AsyncIterable<unknown>): Promise<void> {

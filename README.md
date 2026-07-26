@@ -106,6 +106,18 @@ nemo -q                                    # restart Nemo to pick it up
 Don't run it while a file under the mount is open with unsaved changes —
 see the caution comment in `scripts/clear-protondrive-cache.sh`.
 
+There's also a per-file version — a "Clear cached copy" entry on individual
+files (multi-selection supported) that evicts just that file's cache entry
+via the running mount daemon's IPC socket (`protondrive-nemo evict <path>`,
+see `src/ipcServer.ts`). Unlike the whole-cache action, this one refuses to
+run (with a clear error) if the file currently has unsaved changes open, so
+it can't corrupt an in-progress edit.
+
+```bash
+./scripts/install-nemo-clear-file-cache-action.sh
+nemo -q                                    # restart Nemo to pick it up
+```
+
 ## Architecture
 
 ```
@@ -114,6 +126,9 @@ src/mount.ts             wires DriveTree + ContentStore + FUSE ops into a Fuse i
 src/fuseOps.ts            FUSE syscall handlers (getattr, readdir, read, write, ...)
 src/driveTree.ts          FUSE path <-> Drive node UID resolution + short-lived directory-listing cache
 src/contentStore.ts        local blob cache: download-on-open, upload-on-release
+src/ipcServer.ts            Unix-socket control channel for the `evict` CLI command
+                            (used by the "Clear cached copy" Nemo action) to talk
+                            to the running mount daemon
 src/sdk-bootstrap/         bootstraps @protontech/drive-sdk's ProtonDriveClient:
                             auth (via vendored proton-drive-sdk-account), HTTP client,
                             encrypted SQLite entities/crypto cache, event-cursor persistence

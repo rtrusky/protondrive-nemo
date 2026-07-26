@@ -5,9 +5,15 @@ import Fuse from '@cocalc/fuse-native';
 import { ContentStore } from './contentStore';
 import { DriveTree } from './driveTree';
 import { createFuseOperations } from './fuseOps';
+import { IpcServer, socketPathFor } from './ipcServer';
 import type { initDrive } from './sdk-bootstrap/init';
 
-export async function mount(drive: Awaited<ReturnType<typeof initDrive>>, mountPoint: string): Promise<Fuse> {
+export interface MountHandle {
+    fuse: Fuse;
+    ipc: IpcServer;
+}
+
+export async function mount(drive: Awaited<ReturnType<typeof initDrive>>, mountPoint: string): Promise<MountHandle> {
     if (!drive.auth.isLoggedIn()) {
         throw new Error('Not logged in. Run `protondrive-nemo login` first.');
     }
@@ -17,7 +23,7 @@ export async function mount(drive: Awaited<ReturnType<typeof initDrive>>, mountP
     const tree = new DriveTree(drive.sdk, drive.logger);
     const contentCacheDir = `${drive.config.cacheDir}/blobs`;
     const content = new ContentStore(drive.sdk, contentCacheDir, drive.logger);
-    const ops = createFuseOperations(drive.sdk, tree, content, drive.logger);
+    const { ops, hasUnsavedChanges } = createFuseOperations(drive.sdk, tree, content, drive.logger);
 
     const fuse = new Fuse(mountPoint, ops, {
         force: true,
@@ -31,7 +37,10 @@ export async function mount(drive: Awaited<ReturnType<typeof initDrive>>, mountP
         fuse.mount((err) => (err ? reject(err) : resolve()));
     });
 
-    return fuse;
+    const ipc = new IpcServer(socketPathFor(drive.config.cacheDir), tree, content, hasUnsavedChanges, drive.logger);
+    await ipc.start();
+
+    return { fuse, ipc };
 }
 
 export async function unmount(mountPoint: string): Promise<void> {
