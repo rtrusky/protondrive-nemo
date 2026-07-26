@@ -104,7 +104,9 @@ nemo -q                                    # restart Nemo to pick it up
 ```
 
 Don't run it while a file under the mount is open with unsaved changes —
-see the caution comment in `scripts/clear-protondrive-cache.sh`.
+see the caution comment in `scripts/clear-protondrive-cache.sh`. Unlike the
+per-file action below, this one has no guard against that: it blindly clears
+the whole cache dir regardless of what's open.
 
 There's also a per-file version — a "Clear cached copy" entry on individual
 files (multi-selection supported) that evicts just that file's cache entry
