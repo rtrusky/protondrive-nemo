@@ -45,12 +45,18 @@ export class ContentStore {
         return path.join(this.cacheDir, encodeURIComponent(nodeUid));
     }
 
-    async ensureDownloaded(node: NodeEntity): Promise<string> {
+    /** Whether a file's content is already fully downloaded locally (same freshness check `ensureDownloaded` uses). */
+    async isCached(node: NodeEntity): Promise<boolean> {
         const localPath = this.localPathFor(node.uid);
         const expectedSize = node.activeRevision?.ok ? node.activeRevision.value.claimedSize : undefined;
-
         const existing = await stat(localPath).catch(() => undefined);
-        if (existing && (expectedSize === undefined || existing.size === expectedSize)) {
+        return !!existing && (expectedSize === undefined || existing.size === expectedSize);
+    }
+
+    async ensureDownloaded(node: NodeEntity): Promise<string> {
+        const localPath = this.localPathFor(node.uid);
+
+        if (await this.isCached(node)) {
             return localPath;
         }
 

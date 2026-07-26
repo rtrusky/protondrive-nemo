@@ -120,6 +120,40 @@ it can't corrupt an in-progress edit.
 nemo -q                                    # restart Nemo to pick it up
 ```
 
+### Show cache status in Nemo (emblem + column)
+
+A `nemo-python` extension (`nemo-extension/protondrive_cache_status.py`)
+marks whether each file/folder under the mount is already downloaded and
+decrypted locally, or would need a fresh fetch from Drive on open. It
+queries the running mount daemon's IPC socket directly (op `cacheStatus`
+in `src/ipcServer.ts`) — no `node`/nvm dependency, unlike the shell-script
+actions above. A folder's status reflects everything inside it,
+recursively, up to a 1.2s-per-lookup time budget (see
+`CACHE_STATUS_DEADLINE_MS` in `ipcServer.ts`); anything not resolved in
+time reports as unknown (no status shown) rather than blocking Nemo —
+expect most folders in a large/deep Drive to show nothing at first, filling
+in on repeat views as the daemon's listing cache warms up.
+
+This shows up two ways, since neither is complete on its own:
+
+- **An emblem overlay** on the icon itself (small checkmark/cloud/dash
+  badge), visible in both Icon and List View. Nemo has a confirmed,
+  unfixed upstream bug ([linuxmint/nemo#2875](https://github.com/linuxmint/nemo/issues/2875))
+  where this silently fails to draw on any file whose real thumbnail
+  renders smaller than the emblem — in practice this means photos, PDFs,
+  and other files with a real content thumbnail often don't show the
+  badge, while folders and thumbnail-less files reliably do.
+- **A "Proton Drive Cache" list-view column** ("Cached" / "Not cached" /
+  "Partially cached" text), unaffected by that bug since it's a plain
+  table cell, not composited onto the thumbnail. Opt-in: enable it via
+  List View's *Visible Columns* (right-click a column header, or the View
+  menu). This is the reliable option for photo-heavy folders.
+
+```bash
+./scripts/install-nemo-cache-emblems.sh
+nemo -q                                    # restart Nemo to pick it up
+```
+
 ## Architecture
 
 ```
@@ -129,8 +163,10 @@ src/fuseOps.ts            FUSE syscall handlers (getattr, readdir, read, write, 
 src/driveTree.ts          FUSE path <-> Drive node UID resolution + short-lived directory-listing cache
 src/contentStore.ts        local blob cache: download-on-open, upload-on-release
 src/ipcServer.ts            Unix-socket control channel for the `evict` CLI command
-                            (used by the "Clear cached copy" Nemo action) to talk
-                            to the running mount daemon
+                            and the cache-status Nemo extension to talk to the
+                            running mount daemon
+nemo-extension/             nemo-python extension: cache-status emblem + list-view
+                            column (see install-nemo-cache-emblems.sh)
 src/sdk-bootstrap/         bootstraps @protontech/drive-sdk's ProtonDriveClient:
                             auth (via vendored proton-drive-sdk-account), HTTP client,
                             encrypted SQLite entities/crypto cache, event-cursor persistence
