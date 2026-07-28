@@ -19,6 +19,27 @@ interface OpenFile {
     name: string;
 }
 
+/**
+ * Shared, ref-counted state for a path that's been create()'d but not yet
+ * uploaded, tracked across every fd opened against it (not just the
+ * original creator's). Some writers — the xdg-document-portal, and
+ * Chromium's own download code — create the file, close that fd almost
+ * immediately with nothing written (a "claim the name" step), then reopen
+ * the same path moments later to do the real writing. A single fd's
+ * release() can't tell that apart from a genuine empty file (e.g. `touch`),
+ * so finalizing is driven by refCount + a short grace window instead of by
+ * any one fd's close.
+ */
+interface NewFileState {
+    parentUid: string;
+    name: string;
+    localPath: string;
+    node: NodeEntity;
+    dirty: boolean;
+    refCount: number;
+    finalizeTimer: NodeJS.Timeout | null;
+}
+
 function statFor(node: NodeEntity): Fuse.Stats {
     const isFolder = node.type === NodeType.Folder;
     const size = isFolder ? 4096 : node.activeRevision?.ok ? (node.activeRevision.value.claimedSize ?? 0) : 0;
@@ -94,7 +115,16 @@ export function createFuseOperations(
     // kernel calls getattr() on it immediately as part of completing the
     // create — this is how getattr answers for it in the meantime.
     const openFilesByPath = new Map<string, OpenFile>();
+    // Keyed by path, one entry per path currently in "just created, not yet
+    // uploaded" limbo — shared across every fd opened against that path.
+    const newFileStates = new Map<string, NewFileState>();
     let nextFd = 1000;
+
+    // Long enough to cover the create→close→reopen-to-write idiom observed
+    // from both xdg-document-portal and Chromium's own download code
+    // (reopen followed within single-digit milliseconds in practice), short
+    // enough not to be perceptible for a genuine empty-file create.
+    const NEW_FILE_FINALIZE_GRACE_MS = 500;
 
     async function openLocal(
         path: string,
@@ -108,6 +138,22 @@ export function createFuseOperations(
         openFiles.set(fd, file);
         openFilesByPath.set(path, file);
         return fd;
+    }
+
+    async function finalizeNewFile(path: string, state: NewFileState): Promise<void> {
+        newFileStates.delete(path);
+        try {
+            const created = await content.uploadNewFile(state.parentUid, state.name, state.localPath);
+            tree.rememberNode(created);
+            tree.invalidate(state.parentUid);
+            await content.forget(state.node.uid);
+        } catch (err) {
+            logger.error(`Failed to upload ${state.name} on release`, err);
+        }
+        const rep = openFilesByPath.get(path);
+        if (rep && rep.node.uid === state.node.uid) {
+            openFilesByPath.delete(path);
+        }
     }
 
     const ops: Fuse.OPERATIONS = {
@@ -146,20 +192,24 @@ export function createFuseOperations(
         },
 
         open(path, _flags, cb) {
-            // A file created moments ago may still be uploading in the
-            // background (release() doesn't block the writer's close()) —
-            // reopening it while that's in flight should read/write the
-            // same local copy, not fail because it's not a Drive node yet.
-            // isNewFile:false/dirty:false means this handle's own release()
-            // won't itself trigger another upload; the original creator's
-            // release() remains the sole uploader.
-            const pending = openFilesByPath.get(path);
-            if (pending) {
-                openLocal(path, pending.node, pending.localPath, {
+            // A file created moments ago may still be sitting in the
+            // finalize grace window (or still uploading) — reopening it
+            // should read/write the same local copy, not fail because it's
+            // not a Drive node yet. Bumping refCount and clearing any
+            // pending finalize timer means the eventual close of *this*
+            // handle decides whether/when the upload actually happens.
+            const state = newFileStates.get(path);
+            if (state) {
+                state.refCount++;
+                if (state.finalizeTimer) {
+                    clearTimeout(state.finalizeTimer);
+                    state.finalizeTimer = null;
+                }
+                openLocal(path, state.node, state.localPath, {
                     dirty: false,
-                    isNewFile: false,
-                    parentUid: pending.parentUid,
-                    name: pending.name,
+                    isNewFile: true,
+                    parentUid: state.parentUid,
+                    name: state.name,
                 })
                     .then((fd) => cb(0, fd))
                     .catch((err) => cb(errnoFor(err)));
@@ -187,6 +237,16 @@ export function createFuseOperations(
                 .then(async ({ parent, name }) => {
                     const node = placeholderNode(path, name);
                     const localPath = await content.createEmptyLocal(node.uid);
+                    const state: NewFileState = {
+                        parentUid: parent.uid,
+                        name,
+                        localPath,
+                        node,
+                        dirty: false,
+                        refCount: 1,
+                        finalizeTimer: null,
+                    };
+                    newFileStates.set(path, state);
                     const fd = await openLocal(path, node, localPath, {
                         dirty: false,
                         isNewFile: true,
@@ -220,6 +280,10 @@ export function createFuseOperations(
                 .write(buffer, 0, length, position)
                 .then((res) => {
                     file.dirty = true;
+                    const state = newFileStates.get(file.path);
+                    if (state) {
+                        state.dirty = true;
+                    }
                     cb(res.bytesWritten);
                 })
                 .catch(() => cb(0));
@@ -235,12 +299,29 @@ export function createFuseOperations(
                 .truncate(size)
                 .then(() => {
                     file.dirty = true;
+                    const state = newFileStates.get(file.path);
+                    if (state) {
+                        state.dirty = true;
+                    }
                     cb(0);
                 })
                 .catch((err) => cb(errnoFor(err)));
         },
 
         truncate(path, size, cb) {
+            // A reopen with O_TRUNC of a still-pending new file arrives here
+            // (the kernel issues this as a separate call after open()) — it
+            // isn't a real Drive node yet, so tree.resolve() would 404.
+            const state = newFileStates.get(path);
+            if (state) {
+                fsTruncate(state.localPath, size)
+                    .then(() => {
+                        state.dirty = true;
+                        cb(0);
+                    })
+                    .catch((err) => cb(errnoFor(err)));
+                return;
+            }
             tree
                 .resolve(path)
                 .then((node) => content.ensureDownloaded(node))
@@ -260,34 +341,56 @@ export function createFuseOperations(
                 .close()
                 .catch(() => {})
                 .then(async () => {
-                    // A brand-new file must be uploaded even if it was
-                    // never written to (e.g. `touch`) — it doesn't exist on
-                    // Drive at all yet. An existing file only needs a new
-                    // revision if it was actually modified.
-                    if (!file.isNewFile && !file.dirty) {
+                    if (!file.isNewFile) {
+                        if (!file.dirty) {
+                            cb(0);
+                            return;
+                        }
+                        try {
+                            await content.uploadRevision(file.node, file.localPath);
+                            tree.invalidate(file.parentUid);
+                            cb(0);
+                        } catch (err) {
+                            logger.error(`Failed to upload ${file.name} on release`, err);
+                            cb(errnoFor(err));
+                        }
                         return;
                     }
-                    if (file.isNewFile) {
-                        const created = await content.uploadNewFile(file.parentUid, file.name, file.localPath);
-                        tree.rememberNode(created);
-                        await content.forget(file.node.uid);
+
+                    const state = newFileStates.get(file.path);
+                    if (!state || state.node.uid !== file.node.uid) {
+                        // Already finalized (or superseded) by another handle.
+                        cb(0);
+                        return;
+                    }
+                    state.refCount = Math.max(0, state.refCount - 1);
+                    if (state.refCount > 0) {
+                        cb(0);
+                        return;
+                    }
+                    if (state.dirty) {
+                        // Real content was written before this close — finalize
+                        // now, and hold the close() acknowledgement until it's
+                        // actually resolvable on Drive. A writer that renames
+                        // this path right after closing it (e.g. a browser's
+                        // .crdownload -> final-name rename) must not race ahead
+                        // of the upload finishing.
+                        await finalizeNewFile(file.path, state);
+                        cb(0);
                     } else {
-                        await content.uploadRevision(file.node, file.localPath);
+                        // Still empty: either a genuine `touch`, or a writer
+                        // that's about to reopen this same path to write the
+                        // real content (document portal / Chromium download
+                        // idiom). The kernel doesn't wait for this callback to
+                        // complete a close() syscall, so ack it right away — a
+                        // reopen needs that to happen — and decide later,
+                        // after a brief grace window, whether to upload it as
+                        // an empty file.
+                        cb(0);
+                        state.finalizeTimer = setTimeout(() => {
+                            finalizeNewFile(file.path, state);
+                        }, NEW_FILE_FINALIZE_GRACE_MS);
                     }
-                    tree.invalidate(file.parentUid);
-                })
-                .then(() => {
-                    if (openFilesByPath.get(file.path) === file) {
-                        openFilesByPath.delete(file.path);
-                    }
-                    cb(0);
-                })
-                .catch((err) => {
-                    if (openFilesByPath.get(file.path) === file) {
-                        openFilesByPath.delete(file.path);
-                    }
-                    logger.error(`Failed to upload ${file.name} on release`, err);
-                    cb(errnoFor(err));
                 });
         },
 
@@ -326,17 +429,47 @@ export function createFuseOperations(
         },
 
         rename(src, dest, cb) {
-            Promise.all([tree.resolve(src), tree.resolveParent(src), tree.resolveParent(dest)])
-                .then(async ([node, srcCtx, destCtx]) => {
-                    if (srcCtx.parent.uid !== destCtx.parent.uid) {
-                        await drain(sdk.moveNodes([node.uid], destCtx.parent.uid));
+            (async () => {
+                // If dest is a pending, not-yet-uploaded placeholder (e.g. a
+                // downloader pre-creating the final filename before writing
+                // the real content to a separate temp name), it's about to
+                // be superseded — drop it rather than let it upload later as
+                // an orphan empty file.
+                const destPending = newFileStates.get(dest);
+                if (destPending) {
+                    if (destPending.finalizeTimer) {
+                        clearTimeout(destPending.finalizeTimer);
                     }
-                    if (srcCtx.name !== destCtx.name) {
-                        await sdk.renameNode(node.uid, destCtx.name);
-                    }
-                    tree.invalidate(srcCtx.parent.uid, destCtx.parent.uid);
-                    cb(0);
-                })
+                    newFileStates.delete(dest);
+                    await content.forget(destPending.node.uid).catch(() => {});
+                }
+
+                const [node, srcCtx, destCtx] = await Promise.all([
+                    tree.resolve(src),
+                    tree.resolveParent(src),
+                    tree.resolveParent(dest),
+                ]);
+
+                // POSIX rename() atomically replaces an existing destination.
+                // If a different, already-uploaded node currently sits at
+                // dest (e.g. that same placeholder, already finalized by the
+                // time this rename arrived), trash it so we don't end up
+                // with two nodes sharing the same name.
+                const existingDest = await tree.resolve(dest).catch(() => undefined);
+                if (existingDest && existingDest.uid !== node.uid) {
+                    await drain(sdk.trashNodes([existingDest.uid]));
+                    tree.forgetNode(existingDest.uid);
+                }
+
+                if (srcCtx.parent.uid !== destCtx.parent.uid) {
+                    await drain(sdk.moveNodes([node.uid], destCtx.parent.uid));
+                }
+                if (srcCtx.name !== destCtx.name) {
+                    await sdk.renameNode(node.uid, destCtx.name);
+                }
+                tree.invalidate(srcCtx.parent.uid, destCtx.parent.uid);
+            })()
+                .then(() => cb(0))
                 .catch((err) => cb(errnoFor(err)));
         },
     };
