@@ -25,11 +25,12 @@ export async function mount(drive: Awaited<ReturnType<typeof initDrive>>, mountP
     const content = new ContentStore(drive.sdk, contentCacheDir, drive.logger);
     const { ops, hasUnsavedChanges } = createFuseOperations(drive.sdk, tree, content, drive.logger);
 
+    const isDefaultProfile = drive.config.profile === 'default';
     const fuse = new Fuse(mountPoint, ops, {
         force: true,
         mkdir: true,
-        fsname: 'protondrive-nemo',
-        displayFolder: 'Proton Drive',
+        fsname: isDefaultProfile ? 'protondrive-nemo' : `protondrive-nemo-${drive.config.profile}`,
+        displayFolder: isDefaultProfile ? 'Proton Drive' : `Proton Drive (${drive.config.profile})`,
         debug: process.env.PROTONDRIVE_NEMO_FUSE_DEBUG === '1',
     });
 

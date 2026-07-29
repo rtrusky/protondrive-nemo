@@ -11,14 +11,21 @@ import { getConfig } from './sdk-bootstrap/config';
 import { initDrive } from './sdk-bootstrap/init';
 import { mount, unmount } from './mount';
 
-const DEFAULT_MOUNT_POINT = path.join(homedir(), 'ProtonDrive');
 const APP_VERSION = 'external-drive-protondrive_nemo@0.1.0-alpha';
 const DISCLOSURE = 'protondrive-nemo is a third-party application, not officially supported by Proton.';
 
-async function drive() {
+const ACCOUNT_OPTION = ['-a, --account <name>', 'account profile (isolates keychain entry, cache/app dirs, and default mount point)'] as const;
+
+function defaultMountPointFor(account?: string): string {
+    const resolved = account ?? 'default';
+    return path.join(homedir(), resolved === 'default' ? 'ProtonDrive' : `ProtonDrive-${resolved}`);
+}
+
+async function drive(account?: string) {
     return initDrive({
         appVersion: APP_VERSION,
         clientUidPrefix: 'protondrive-nemo',
+        profile: account,
     });
 }
 
@@ -28,9 +35,10 @@ program.name('protondrive-nemo').description(`Unofficial FUSE mount of Proton Dr
 program
     .command('login')
     .description('Sign in to Proton Drive via your browser')
-    .action(async () => {
+    .option(...ACCOUNT_OPTION)
+    .action(async (opts: { account?: string }) => {
         console.log(DISCLOSURE);
-        const d = await drive();
+        const d = await drive(opts.account);
         if (d.auth.isLoggedIn()) {
             console.log('Already logged in.');
             await d.dispose();
@@ -54,8 +62,9 @@ program
 program
     .command('logout')
     .description('Sign out and remove the locally stored session')
-    .action(async () => {
-        const d = await drive();
+    .option(...ACCOUNT_OPTION)
+    .action(async (opts: { account?: string }) => {
+        const d = await drive(opts.account);
         await d.auth.logout();
         console.log('Logged out.');
         await d.dispose();
@@ -65,10 +74,13 @@ program
 program
     .command('status')
     .description('Show login and mount status')
-    .action(async () => {
-        const d = await drive();
+    .option(...ACCOUNT_OPTION)
+    .option('-m, --mount-point <path>', 'mount point')
+    .action(async (opts: { account?: string; mountPoint?: string }) => {
+        const d = await drive(opts.account);
+        console.log(`Account: ${d.config.profile}`);
         console.log(`Logged in: ${d.auth.isLoggedIn()}`);
-        console.log(`Mount point: ${DEFAULT_MOUNT_POINT}`);
+        console.log(`Mount point: ${opts.mountPoint ?? defaultMountPointFor(opts.account)}`);
         await d.dispose();
         process.exit(0);
     });
@@ -76,11 +88,13 @@ program
 program
     .command('mount')
     .description('Mount Proton Drive as a folder (runs in the foreground until interrupted)')
-    .option('-m, --mount-point <path>', 'mount point', DEFAULT_MOUNT_POINT)
-    .action(async (opts: { mountPoint: string }) => {
-        const d = await drive();
-        const { fuse, ipc } = await mount(d, opts.mountPoint);
-        console.log(`Mounted Proton Drive at ${opts.mountPoint}`);
+    .option(...ACCOUNT_OPTION)
+    .option('-m, --mount-point <path>', 'mount point')
+    .action(async (opts: { account?: string; mountPoint?: string }) => {
+        const mountPoint = opts.mountPoint ?? defaultMountPointFor(opts.account);
+        const d = await drive(opts.account);
+        const { fuse, ipc } = await mount(d, mountPoint);
+        console.log(`Mounted Proton Drive at ${mountPoint}`);
 
         const shutdown = async () => {
             console.log('\nUnmounting...');
@@ -99,25 +113,29 @@ program
 program
     .command('unmount')
     .description('Unmount Proton Drive')
-    .option('-m, --mount-point <path>', 'mount point', DEFAULT_MOUNT_POINT)
-    .action(async (opts: { mountPoint: string }) => {
-        await unmount(opts.mountPoint);
-        console.log(`Unmounted ${opts.mountPoint}`);
+    .option(...ACCOUNT_OPTION)
+    .option('-m, --mount-point <path>', 'mount point')
+    .action(async (opts: { account?: string; mountPoint?: string }) => {
+        const mountPoint = opts.mountPoint ?? defaultMountPointFor(opts.account);
+        await unmount(mountPoint);
+        console.log(`Unmounted ${mountPoint}`);
         process.exit(0);
     });
 
 program
     .command('evict <paths...>')
     .description("Remove the locally cached decrypted copy of one or more files (the mount re-downloads them on next open); doesn't touch anything on Drive")
-    .option('-m, --mount-point <path>', 'mount point', DEFAULT_MOUNT_POINT)
-    .action(async (paths: string[], opts: { mountPoint: string }) => {
-        const config = getConfig({ appVersion: APP_VERSION, clientUidPrefix: 'protondrive-nemo' });
+    .option(...ACCOUNT_OPTION)
+    .option('-m, --mount-point <path>', 'mount point')
+    .action(async (paths: string[], opts: { account?: string; mountPoint?: string }) => {
+        const mountPoint = opts.mountPoint ?? defaultMountPointFor(opts.account);
+        const config = getConfig({ appVersion: APP_VERSION, clientUidPrefix: 'protondrive-nemo', profile: opts.account });
         const socketPath = socketPathFor(config.cacheDir);
 
         let hadError = false;
         for (const target of paths) {
             try {
-                const fusePath = toFusePath(target, opts.mountPoint);
+                const fusePath = toFusePath(target, mountPoint);
                 const res = await sendEvict(socketPath, fusePath);
                 if (res.ok) {
                     console.log(`Cleared cache: ${target}`);

@@ -31,7 +31,9 @@ a real FUSE filesystem, so file-manager integration comes for free.
 - **Session storage**: your login session is stored in the OS keychain via
   `keytar` (libsecret/GNOME Keyring on Linux), under its own service name
   — separate from Proton's official `proton-drive` CLI, so both can be
-  installed without conflicting.
+  installed without conflicting. The keychain *account* name is scoped by
+  `--account` (`auth-session` for the default account, `auth-session-<name>`
+  for others) — see [Multiple accounts](#multiple-accounts).
 
 ## Requirements
 
@@ -71,8 +73,8 @@ node dist/cli.js unmount
 
 Other commands: `node dist/cli.js status`, `node dist/cli.js logout`.
 
-Add `-m /custom/path` to `mount`/`unmount` to use a different mount point
-than the default `~/ProtonDrive`.
+Add `-m /custom/path` to `mount`/`unmount`/`status`/`evict` to use a
+different mount point than the default `~/ProtonDrive`.
 
 ### Run automatically on login
 
@@ -89,6 +91,46 @@ systemctl --user enable --now protondrive-nemo
 ./scripts/install-nemo-bookmark.sh        # bookmarks ~/ProtonDrive
 nemo -q                                    # restart Nemo to pick it up
 ```
+
+### Multiple accounts
+
+Every command takes `-a, --account <name>` to operate on an isolated
+account profile: its own keychain session, its own cache/app dir
+(`$XDG_CACHE_HOME/protondrive-nemo-<name>`,
+`$XDG_DATA_HOME/protondrive-nemo-<name>`), and its own default mount point
+(`~/ProtonDrive-<name>`). Omitting `--account` (or passing `--account
+default`) is exactly today's single-account behavior — nothing changes for
+an existing install.
+
+```bash
+node dist/cli.js login --account work
+node dist/cli.js mount --account work     # mounts ~/ProtonDrive-work
+```
+
+To run a second account as an always-on background service alongside the
+default one, use the templated unit — it doesn't touch the existing
+`protondrive-nemo.service`:
+
+```bash
+ln -s "$(pwd)/systemd/protondrive-nemo@.service" ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now protondrive-nemo@work
+```
+
+Add its own sidebar bookmark the same way, just pointed at its mount point:
+
+```bash
+./scripts/install-nemo-bookmark.sh ~/ProtonDrive-work
+```
+
+**Not yet multi-account aware**: the two "Clear cache" right-click actions
+and the cache-status emblem/column extension below all resolve a single
+global `PROTONDRIVE_NEMO_MOUNT_POINT`/`PROTONDRIVE_NEMO_DATA_DIR` pair once,
+at Nemo's own process startup — Nemo is one long-running process, so there's
+no per-file-path dispatch to the right account's daemon yet. They'll keep
+working for whichever one account they're pointed at; the mounts themselves
+(browsing, reading, writing) work fully and correctly for every
+simultaneously-running account regardless.
 
 ### Add a "Clear cache" right-click action
 

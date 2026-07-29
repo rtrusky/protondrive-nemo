@@ -10,6 +10,6 @@ export type { Credentials } from './credentials';
  * supports switchable stores (OS keychain, pass(1), plaintext file); this app
  * only needs the OS keychain (libsecret via keytar). See ../../../VENDOR.md.
  */
-export function initCredentials(logger: Logger): Credentials {
-    return new Credentials(new SecretsSessionStore(logger), logger);
+export function initCredentials(profile: string, logger: Logger): Credentials {
+    return new Credentials(new SecretsSessionStore(profile, logger), logger);
 }
