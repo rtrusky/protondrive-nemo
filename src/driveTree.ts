@@ -37,10 +37,19 @@ export class DriveTree {
 
     async getRootUid(): Promise<string> {
         if (!this.rootUidPromise) {
-            this.rootUidPromise = this.sdk.getMyFilesRootFolder().then((node) => {
-                this.nodesByUid.set(node.uid, node);
-                return node.uid;
-            });
+            this.rootUidPromise = this.sdk
+                .getMyFilesRootFolder()
+                .then((node) => {
+                    this.nodesByUid.set(node.uid, node);
+                    return node.uid;
+                })
+                .catch((err) => {
+                    // Don't let a transient failure (e.g. no network yet at
+                    // mount startup) permanently poison every future lookup
+                    // with the same rejected promise — let the next caller retry.
+                    this.rootUidPromise = undefined;
+                    throw err;
+                });
         }
         return this.rootUidPromise;
     }
