@@ -342,6 +342,18 @@ export function createFuseOperations(
                 .catch(() => {})
                 .then(async () => {
                     if (!file.isNewFile) {
+                        // Once this fd is closed, getattr()/open() must stop
+                        // answering from this handle's local snapshot (via
+                        // openFilesByPath) and fall back to tree.resolve()
+                        // instead — otherwise a later evict of the local
+                        // cache leaves them stat()ing/reading a file that no
+                        // longer exists on disk. Guarded on identity in case
+                        // another open() already replaced this path's entry.
+                        const rep = openFilesByPath.get(file.path);
+                        if (rep === file) {
+                            openFilesByPath.delete(file.path);
+                        }
+
                         if (!file.dirty) {
                             cb(0);
                             return;
@@ -442,6 +454,45 @@ export function createFuseOperations(
                     }
                     newFileStates.delete(dest);
                     await content.forget(destPending.node.uid).catch(() => {});
+                }
+
+                // If src is itself a pending, not-yet-uploaded placeholder,
+                // there's no Drive node yet for tree.resolve(src) to find —
+                // GLib's g_file_replace_contents (gedit/GNOME Text Editor's
+                // save path) issues RENAME while its temp file's write
+                // handle is still open, well before the eventual close()
+                // that would otherwise finalize and upload it. Re-target the
+                // in-flight state onto `dest` instead of resolving; the
+                // eventual close uploads it under the new name/location.
+                const srcPending = newFileStates.get(src);
+                if (srcPending) {
+                    const destCtx = await tree.resolveParent(dest);
+                    const existingDest = await tree.resolve(dest).catch(() => undefined);
+                    if (existingDest) {
+                        await drain(sdk.trashNodes([existingDest.uid]));
+                        tree.forgetNode(existingDest.uid);
+                    }
+
+                    newFileStates.delete(src);
+                    srcPending.parentUid = destCtx.parent.uid;
+                    srcPending.name = destCtx.name;
+                    newFileStates.set(dest, srcPending);
+
+                    const openRep = openFilesByPath.get(src);
+                    if (openRep) {
+                        openFilesByPath.delete(src);
+                        openFilesByPath.set(dest, openRep);
+                    }
+                    for (const file of openFiles.values()) {
+                        if (file.path === src) {
+                            file.path = dest;
+                            file.parentUid = destCtx.parent.uid;
+                            file.name = destCtx.name;
+                        }
+                    }
+
+                    tree.invalidate(destCtx.parent.uid);
+                    return;
                 }
 
                 const [node, srcCtx, destCtx] = await Promise.all([
