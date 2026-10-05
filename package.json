@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@cocalc/fuse-native": "^2.4.3",
-    "@protontech/crypto": "^2.1.1",
-    "@protontech/drive-sdk": "^0.20.1",
+    "@protontech/crypto": "^2.2.0",
+    "@protontech/drive-sdk": "^0.22.2",
     "@protontech/global-types": "^1.1.0",
     "better-sqlite3": "^11.3.0",
     "commander": "^12.1.0",

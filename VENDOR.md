@@ -10,7 +10,7 @@ this project vendors and, where necessary, ports that code from Bun to Node.
 ## `vendor/proton-drive-sdk-account/`
 
 Copied verbatim (implementation files only, tests dropped) from
-`incubating/account/js/src` at commit `e0ad37e30ab16dd78899d1f4475fd6760b4c5c43`
+`incubating/account/js/src` at commit `df3a717bb8123791abf115a1dd171cb66813e9f4`
 of `ProtonDriveApps/sdk`. No source changes — it has no Bun-specific APIs.
 
 To re-sync with upstream:
